@@ -3,7 +3,7 @@ import './index.css';
 
 export default function App() {
     // ── CONFIGURATION AREA ──
-    // Automatically uses Vercel's environment variable if available, otherwise safely uses your fallback string locally
+    // Automatically uses a Vercel/environment variable if configured, otherwise uses your fallback key string
     const API_TOKEN = import.meta.env.VITE_API_TOKEN || "f6bffce1b5394337b5aacedb0594d0a4";
 
     // States
@@ -64,57 +64,53 @@ export default function App() {
         return baseline.sort((a, b) => a.min - b.min);
     };
 
-    // ── API PROCESSING DATA PIPELINE WITH MULTI-PROXY FALLBACK ──
-    // ── API PROCESSING DATA PIPELINE WITH MULTI-PROXY FALLBACK ──
+    // ── API PROCESSING DATA PIPELINE WITH CACHE BUSTING & MULTI-PROXY FALLBACK ──
     const syncFootballDataFeed = async () => {
-        setEngineStatus("Syncing...");
-
-        const cacheBuster = `?_cb=${new Date().getTime()}`;
-        const targetUrl = `https://api.football-data.org/v4/matches${cacheBuster}`;
-
-        // Array of 3 completely different CORS proxy architectures
-        const proxyPipelines = [
-            `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-            `https://corsproxy.io/?${targetUrl}`,
-            `https://cors-anywhere.herokuapp.com/${targetUrl}` // Requires temporary activation if reached
-        ];
-
-        let response = null;
-        let successfulPipeline = "";
-
-        // Try each proxy pathway one after another
-        for (const pipelineUrl of proxyPipelines) {
-            try {
-                response = await fetch(pipelineUrl, {
-                    method: "GET",
-                    headers: {
-                        "X-Auth-Token": API_TOKEN
-                    }
-                });
-
-                if (response.ok) {
-                    successfulPipeline = pipelineUrl.includes("allorigins") ? "AllOrigins" : "CorsProxyIO";
-                    break;
-                }
-            } catch (error) {
-                console.warn(`Gateway route blocked or timed out: ${pipelineUrl}`);
-            }
-        }
-
         try {
+            const cacheBuster = `?_cb=${new Date().getTime()}`;
+            const targetApiUrl = `https://api.football-data.org/v4/matches${cacheBuster}`;
+
+            // Array of multiple proxies. If one is blocked by your hosting provider, the code tries the next one.
+            const alternativePipelines = [
+                `https://api.allorigins.win/raw?url=${encodeURIComponent(targetApiUrl)}`,
+                `https://corsproxy.io/?${targetApiUrl}`
+            ];
+
+            let response = null;
+            let successPipelineLabel = "Default Path";
+
+            for (const proxyUrl of alternativePipelines) {
+                try {
+                    response = await fetch(proxyUrl, {
+                        method: "GET",
+                        headers: {
+                            "X-Auth-Token": API_TOKEN
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        successPipelineLabel = proxyUrl.includes("allorigins") ? "AllOrigins Stream" : "CorsProxyIO Stream";
+                        break;
+                    }
+                } catch (proxyError) {
+                    console.warn(`Proxy branch bypassed: ${proxyUrl}`);
+                }
+            }
+
             if (!response || !response.ok) {
-                throw new Error(`All endpoint data pathways restricted. Status: ${response?.status}`);
+                throw new Error(`API returned network status: ${response ? response.status : 'No Response'}`);
             }
 
             const data = await response.json();
 
             if (data && data.matches && data.matches.length > 0) {
-                parseAndDisplayMatches(data.matches, `STREAM ACTIVE (${successfulPipeline})`);
+                parseAndDisplayMatches(data.matches, `V4 ${successPipelineLabel} ACTIVE`);
             } else {
                 setEngineStatus("Connected (Empty Set)");
                 setMatchData([]);
                 setLoading(false);
             }
+
         } catch (error) {
             console.error("Network sync block:", error);
             setEngineStatus("Connection Interface Failure");
@@ -188,7 +184,7 @@ export default function App() {
     const upcomingMatches = matchData.filter(m => m.statusShort === "SCHED");
 
     return (
-        <div className="app-container">
+        <div className="app-container" style={{ color: '#0f172a' }}>
             {/* BRANDING TOP BAR */}
             <div className="hdr">
                 <div className="hdr-top">
@@ -257,15 +253,13 @@ export default function App() {
                                                     {isMatchLive ? `🔴 IN PLAY — ${match.elapsed}'` : (isMatchFinished ? 'FINAL (FT)' : 'SCHEDULED')}
                                                 </span>
                                             </div>
-                                            <div className="mteams">
+                                            <div className="mteams" style={{ color: '#0f172a' }}>
                                                 {match.hflag && <img className="mflag" src={match.hflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
                                                 <span className="mname" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#0f172a' }}>{match.h}</span>
-
-                                                {/* FIX: Explicitly forcing dark slate color to prevent theme stylesheet white-out */}
-                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ color: '#0f172a', fontWeight: '800', padding: '0 4px' }}>
+                                                {/* FIX: Forced typography text color to dark charcoal to fix hidden/white score styling glitch */}
+                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ color: '#0f172a', fontWeight: '800' }}>
                                                     {match.goalsHome} – {match.goalsAway}
                                                 </span>
-
                                                 <span className="mname r" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#0f172a' }}>{match.a}</span>
                                                 {match.aflag && <img className="mflag" src={match.aflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
                                             </div>
@@ -282,14 +276,14 @@ export default function App() {
                         {activeSelectedMatch ? (
                             <>
                                 <div className="scoreboard" style={{ background: activeSelectedMatch.statusShort === 'LIVE' ? 'linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%)' : '#fff' }}>
-                                    <div className="sb-grp">{activeSelectedMatch.grp.toUpperCase()}</div>
+                                    <div className="sb-grp" style={{ color: '#475569' }}>{activeSelectedMatch.grp.toUpperCase()}</div>
                                     <div className="sb-teams">
                                         <div className="sb-team">
                                             {activeSelectedMatch.hflag && <img className="sb-flag" src={activeSelectedMatch.hflag} alt="" onError={(e) => e.target.style.opacity = 0} />}
                                             <div className="sb-tname" style={{ color: '#0f172a', fontWeight: '700' }}>{activeSelectedMatch.h}</div>
                                         </div>
                                         <div className="sb-scores">
-                                            {/* FIX: Standardizing text fill colors to black/dark gray for scoreboard header display */}
+                                            {/* FIX: Added clear dark formatting to main tracking viewport layout scores */}
                                             <div className="sb-num" style={{ color: '#0f172a', fontWeight: '800' }}>
                                                 {activeSelectedMatch.goalsHome} &nbsp; – &nbsp; {activeSelectedMatch.goalsAway}
                                             </div>
@@ -307,7 +301,7 @@ export default function App() {
 
                                 <div className="feed-wrap" style={{ flex: 1, background: '#fff', padding: '14px', borderRadius: '12px' }}>
                                     <div className="feed-hd" style={{ paddingBottom: '8px', borderBottom: '1px solid #f1f5f9', marginBottom: '10px' }}>
-                                        <h2 style={{ fontSize: '14px', fontWeight: '700' }}>Event Commentary Log</h2>
+                                        <h2 style={{ fontSize: '14px', fontWeight: '700', color: '#0f172a' }}>Event Commentary Log</h2>
                                     </div>
                                     <div className="feed-scroll" style={{ maxHeight: '380px', overflowY: 'auto' }}>
                                         {activeSelectedMatch.fullCommentary?.slice().reverse().map((log, i) => {
@@ -326,7 +320,7 @@ export default function App() {
                                 </div>
                             </>
                         ) : (
-                            <div className="panel" style={{ padding: '20px', textAlign: 'center' }}>Select an active tracking target row.</div>
+                            <div className="panel" style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>Select an active tracking target row.</div>
                         )}
                     </div>
 
@@ -342,7 +336,7 @@ export default function App() {
                 </div>
             )}
 
-            {/* TAB 2: BRAND NEW UPCOMING FIXTURES VIEWPORT */}
+            {/* TAB 2: UPCOMING FIXTURES VIEWPORT */}
             {currentTab === 'future' && (
                 <div className="page on" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     <div className="panel" style={{ background: '#fff', padding: '18px', borderRadius: '12px' }}>
@@ -364,7 +358,7 @@ export default function App() {
                                             <span style={{ background: '#dbeafe', padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase' }}>Scheduled</span>
                                         </div>
                                         <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px', fontWeight: '500' }}>{match.grp}</div>
-                                        <div className="mteams" style={{ margin: '8px 0' }}>
+                                        <div className="mteams" style={{ margin: '8px 0', color: '#0f172a' }}>
                                             <span className="mname" style={{ fontSize: '14px', color: '#0f172a' }}>{match.h}</span>
                                             <span style={{ color: '#94a3b8', fontSize: '11px', fontWeight: '800', padding: '0 8px' }}>VS</span>
                                             <span className="mname r" style={{ fontSize: '14px', color: '#0f172a' }}>{match.a}</span>
@@ -392,7 +386,7 @@ export default function App() {
                                 {completedMatches.map((match) => (
                                     <div key={match.id} className="mcard" style={{ borderLeft: '4px solid #94a3b8', cursor: 'default' }}>
                                         <div className="mcard-top"><span style={{ color: '#64748b' }}>{match.grp}</span><span className="badge b-ft">FT</span></div>
-                                        <div className="mteams">
+                                        <div className="mteams" style={{ color: '#0f172a' }}>
                                             <span className="mname" style={{ color: '#0f172a' }}>{match.h}</span>
                                             <span className="mscore" style={{ color: '#0f172a', fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
                                             <span className="mname r" style={{ color: '#0f172a' }}>{match.a}</span>
