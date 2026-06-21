@@ -65,47 +65,58 @@ export default function App() {
     };
 
     // ── API PROCESSING DATA PIPELINE WITH MULTI-PROXY FALLBACK ──
+    // ── API PROCESSING DATA PIPELINE WITH MULTI-PROXY FALLBACK ──
     const syncFootballDataFeed = async () => {
-        try {
-            const cacheBuster = `?_cb=${new Date().getTime()}`;
-            const targetUrl = `https://api.football-data.org/v4/matches${cacheBuster}`;
+        setEngineStatus("Syncing...");
 
-            // Sequential proxy fallback chain: checks multiple paths to bypass public data center blocking
-            const alternativeGateways = [
-                `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-                `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`
-            ];
+        const cacheBuster = `?_cb=${new Date().getTime()}`;
+        const targetUrl = `https://api.football-data.org/v4/matches${cacheBuster}`;
 
-            let response = null;
-            for (const gateway of alternativeGateways) {
-                try {
-                    response = await fetch(gateway, {
-                        method: "GET",
-                        headers: {
-                            "X-Auth-Token": API_TOKEN
-                        }
-                    });
-                    if (response.ok) break;
-                } catch (err) {
-                    console.warn(`Gateway route restricted: ${gateway}`);
+        // Array of 3 completely different CORS proxy architectures
+        const proxyPipelines = [
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+            `https://corsproxy.io/?${targetUrl}`,
+            `https://cors-anywhere.herokuapp.com/${targetUrl}` // Requires temporary activation if reached
+        ];
+
+        let response = null;
+        let successfulPipeline = "";
+
+        // Try each proxy pathway one after another
+        for (const pipelineUrl of proxyPipelines) {
+            try {
+                response = await fetch(pipelineUrl, {
+                    method: "GET",
+                    headers: {
+                        "X-Auth-Token": API_TOKEN
+                    }
+                });
+
+                if (response.ok) {
+                    successfulPipeline = pipelineUrl.includes("allorigins") ? "AllOrigins" : "CorsProxyIO";
+                    break;
                 }
+            } catch (error) {
+                console.warn(`Gateway route blocked or timed out: ${pipelineUrl}`);
             }
+        }
 
+        try {
             if (!response || !response.ok) {
-                throw new Error("All data pipelines rejected connection requests.");
+                throw new Error(`All endpoint data pathways restricted. Status: ${response?.status}`);
             }
 
             const data = await response.json();
+
             if (data && data.matches && data.matches.length > 0) {
-                parseAndDisplayMatches(data.matches, "BROADCAST STREAM ACTIVE");
+                parseAndDisplayMatches(data.matches, `STREAM ACTIVE (${successfulPipeline})`);
             } else {
-                setEngineStatus("Connected (Empty Payload)");
+                setEngineStatus("Connected (Empty Set)");
                 setMatchData([]);
                 setLoading(false);
             }
-
         } catch (error) {
-            console.error("Network sync execution block:", error);
+            console.error("Network sync block:", error);
             setEngineStatus("Connection Interface Failure");
             setLoading(false);
         }
