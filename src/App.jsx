@@ -3,7 +3,8 @@ import './index.css';
 
 export default function App() {
     // ── CONFIGURATION AREA ──
-    const API_TOKEN = import.meta.env.VITE_API_TOKEN;
+    // Uses Vercel's secret variable if deployed, otherwise falls back to your local token string
+    const API_TOKEN = import.meta.env.VITE_API_TOKEN || "f6bffce1b5394337b5aacedb0594d0a4";
 
     // States
     const [currentTab, setCurrentTab] = useState('live');
@@ -108,7 +109,6 @@ export default function App() {
             else if (status === "LIVE") minutesElapsed = 45;
             else if (status === "FT") minutesElapsed = 90;
 
-            // Formats upcoming raw date markers safely
             let localizedKickoff = "Date Pending";
             if (match.utcDate) {
                 localizedKickoff = new Date(match.utcDate).toLocaleString([], {
@@ -158,7 +158,6 @@ export default function App() {
         };
     }, []);
 
-    // Selection matrices
     const activeSelectedMatch = matchData.find(m => m.id === curMatchIdx) || matchData[0] || null;
     const liveMatches = matchData.filter(m => m.statusShort === "LIVE");
     const completedMatches = matchData.filter(m => m.statusShort === "FT");
@@ -215,7 +214,6 @@ export default function App() {
                                     const isMatchLive = match.statusShort === "LIVE";
                                     const isMatchFinished = match.statusShort === "FT";
 
-                                    // Live items receive customized inline styles dynamically to emphasize priority tracking
                                     const dynamicCardStyle = isMatchLive ? {
                                         borderLeft: '5px solid #22c55e',
                                         background: '#f0fdf4',
@@ -237,9 +235,14 @@ export default function App() {
                                             </div>
                                             <div className="mteams">
                                                 {match.hflag && <img className="mflag" src={match.hflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
-                                                <span className="mname" style={{ fontWeight: isMatchLive ? '700' : '400' }}>{match.h}</span>
-                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`}>{match.goalsHome} – {match.goalsAway}</span>
-                                                <span className="mname r" style={{ fontWeight: isMatchLive ? '700' : '400' }}>{match.a}</span>
+                                                <span className="mname" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#1e293b' }}>{match.h}</span>
+
+                                                {/* FIX: Forced explicit dark color and bolding for the scores to prevent white text clash */}
+                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ color: '#0f172a', fontWeight: '800' }}>
+                                                    {match.goalsHome} – {match.goalsAway}
+                                                </span>
+
+                                                <span className="mname r" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#1e293b' }}>{match.a}</span>
                                                 {match.aflag && <img className="mflag" src={match.aflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
                                             </div>
                                             <div className="mvenue">🏟️ {match.venue}</div>
@@ -259,17 +262,20 @@ export default function App() {
                                     <div className="sb-teams">
                                         <div className="sb-team">
                                             {activeSelectedMatch.hflag && <img className="sb-flag" src={activeSelectedMatch.hflag} alt="" onError={(e) => e.target.style.opacity = 0} />}
-                                            <div className="sb-tname">{activeSelectedMatch.h}</div>
+                                            <div className="sb-tname" style={{ color: '#0f172a' }}>{activeSelectedMatch.h}</div>
                                         </div>
                                         <div className="sb-scores">
-                                            <div className="sb-num">{activeSelectedMatch.goalsHome} &nbsp; – &nbsp; {activeSelectedMatch.goalsAway}</div>
+                                            {/* FIX: Forced dark color text for main scoreboard header view */}
+                                            <div className="sb-num" style={{ color: '#0f172a', fontWeight: '800' }}>
+                                                {activeSelectedMatch.goalsHome} &nbsp; – &nbsp; {activeSelectedMatch.goalsAway}
+                                            </div>
                                             <div className="sb-time" style={{ color: activeSelectedMatch.statusShort === 'LIVE' ? '#22c55e' : '#64748b', fontWeight: 'bold' }}>
                                                 {activeSelectedMatch.statusShort === 'FT' ? '🏁 Concluded Full-Time' : (activeSelectedMatch.statusShort === 'SCHED' ? '📅 Upcoming Fixture' : `⏱️ In-Play: ${activeSelectedMatch.elapsed}'`)}
                                             </div>
                                         </div>
                                         <div className="sb-team">
                                             {activeSelectedMatch.aflag && <img className="sb-flag" src={activeSelectedMatch.aflag} alt="" onError={(e) => e.target.style.opacity = 0} />}
-                                            <div className="sb-tname">{activeSelectedMatch.a}</div>
+                                            <div className="sb-tname" style={{ color: '#0f172a' }}>{activeSelectedMatch.a}</div>
                                         </div>
                                     </div>
                                     <div className="sb-venue" style={{ textAlign: 'center', fontSize: '11px', color: '#64748b', marginTop: '6px' }}>📍 Venue: {activeSelectedMatch.venue}</div>
@@ -335,9 +341,9 @@ export default function App() {
                                         </div>
                                         <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px', fontWeight: '500' }}>{match.grp}</div>
                                         <div className="mteams" style={{ margin: '8px 0' }}>
-                                            <span className="mname" style={{ fontSize: '14px' }}>{match.h}</span>
+                                            <span className="mname" style={{ fontSize: '14px', color: '#0f172a' }}>{match.h}</span>
                                             <span style={{ color: '#94a3b8', fontSize: '11px', fontWeight: '800', padding: '0 8px' }}>VS</span>
-                                            <span className="mname r" style={{ fontSize: '14px' }}>{match.a}</span>
+                                            <span className="mname r" style={{ fontSize: '14px', color: '#0f172a' }}>{match.a}</span>
                                         </div>
                                         <div style={{ borderTop: '1px dashed #e2e8f0', paddingTop: '6px', marginTop: '6px', fontSize: '11px', color: '#64748b' }}>
                                             📍 Ground Arena: {match.venue}
@@ -363,9 +369,9 @@ export default function App() {
                                     <div key={match.id} className="mcard" style={{ borderLeft: '4px solid #94a3b8', cursor: 'default' }}>
                                         <div className="mcard-top"><span>{match.grp}</span><span className="badge b-ft">FT</span></div>
                                         <div className="mteams">
-                                            <span className="mname">{match.h}</span>
-                                            <span className="mscore">{match.goalsHome} – {match.goalsAway}</span>
-                                            <span className="mname r">{match.a}</span>
+                                            <span className="mname" style={{ color: '#0f172a' }}>{match.h}</span>
+                                            <span className="mscore" style={{ color: '#0f172a', fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
+                                            <span className="mname r" style={{ color: '#0f172a' }}>{match.a}</span>
                                         </div>
                                     </div>
                                 ))}
