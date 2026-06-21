@@ -3,14 +3,6 @@ import './index.css';
 
 export default function App() {
     // ── CONFIGURATION AREA ──
-    // worldcup26.ir is a community World Cup 2026 API with CORS_ORIGINS=* —
-    // it can be called directly from the browser with no proxy at all.
-    // football-data.org has NO CORS support, so it always needed a 3rd-party
-    // proxy (corsproxy.io / allorigins.win / cors-anywhere). Those proxies behave
-    // inconsistently by region/IP — which is why it worked on your local machine
-    // but failed once deployed to Vercel's edge network ("Connection Interface
-    // Failure"). Removing the proxy dependency removes that whole failure class.
-    // Source: https://github.com/rezarahiminia/worldcup2026
     const GAMES_API_URL = "https://worldcup26.ir/get/games";
     const TEAMS_API_URL = "https://worldcup26.ir/get/teams";
     const STADIUMS_API_URL = "https://worldcup26.ir/get/stadiums";
@@ -73,7 +65,7 @@ export default function App() {
         return baseline.sort((a, b) => a.min - b.min);
     };
 
-    // ── DATA SYNC PIPELINE (DIRECT, NO PROXY) ──
+    // ── DATA SYNC PIPELINE ──
     const syncFootballDataFeed = async () => {
         setEngineStatus("Syncing...");
 
@@ -97,7 +89,7 @@ export default function App() {
             const stadiumsList = Array.isArray(stadiums) ? stadiums : (stadiums.data || stadiums.stadiums || []);
 
             if (gamesList.length > 0) {
-                parseAndDisplayMatches(gamesList, teamsList, stadiumsList, "STREAM ACTIVE (worldcup26.ir)");
+                parseAndDisplayMatches(gamesList, teamsList, stadiumsList, "STREAM ACTIVE");
             } else {
                 setEngineStatus("Connected (Empty Set)");
                 setMatchData([]);
@@ -121,8 +113,6 @@ export default function App() {
             const awayTeam = teamById[String(match.away_team_id)];
             const stadium = stadiumById[String(match.stadium_id)];
 
-            // This API exposes a binary finished flag plus a scheduled date — no
-            // documented live in-play minute field — so status/elapsed are derived:
             const kickoff = match.local_date ? new Date(match.local_date) : null;
             const now = new Date();
             let status = "SCHED";
@@ -158,6 +148,7 @@ export default function App() {
                 statusShort: status,
                 elapsed: minutesElapsed,
                 kickoffTime: localizedKickoff,
+                rawKickoff: kickoff,
                 h: homeTeam ? homeTeam.name_en : "Home Side",
                 a: awayTeam ? awayTeam.name_en : "Away Side",
                 hflag: homeTeam ? homeTeam.flag : "",
@@ -193,10 +184,37 @@ export default function App() {
         };
     }, []);
 
-    const activeSelectedMatch = matchData.find(m => m.id === curMatchIdx) || matchData[0] || null;
+    // ── EXPANDED TIME WINDOW FILTERS ──
+    const now = new Date();
+    const past36Hours = new Date(now.getTime() - 36 * 60 * 60 * 1000);
+    const future36Hours = new Date(now.getTime() + 36 * 60 * 60 * 1000);
+
+    // Filtered arrays
     const liveMatches = matchData.filter(m => m.statusShort === "LIVE");
-    const completedMatches = matchData.filter(m => m.statusShort === "FT");
-    const upcomingMatches = matchData.filter(m => m.statusShort === "SCHED");
+
+    // Dynamic compilation logic for Dashboard grid (Combines Live, Recently Done, and Immediate Upcoming)
+    const visibleDashboardMatches = matchData.filter(m => {
+        if (m.statusShort === "LIVE") return true;
+        if (m.rawKickoff && m.rawKickoff >= past36Hours && m.rawKickoff <= future36Hours) return true;
+        return false;
+    }).sort((a, b) => {
+        if (a.statusShort === "LIVE" && b.statusShort !== "LIVE") return -1;
+        if (b.statusShort === "LIVE" && a.statusShort !== "LIVE") return 1;
+        return (a.rawKickoff?.getTime() || 0) - (b.rawKickoff?.getTime() || 0);
+    });
+
+    // Filters down exactly the next 3 scheduled matches chronologically
+    const upcomingMatchesTop3 = matchData
+        .filter(m => m.statusShort === "SCHED")
+        .sort((a, b) => (a.rawKickoff?.getTime() || 0) - (b.rawKickoff?.getTime() || 0))
+        .slice(0, 3);
+
+    const completedMatchesAll = matchData
+        .filter(m => m.statusShort === "FT")
+        .sort((a, b) => (b.rawKickoff?.getTime() || 0) - (a.rawKickoff?.getTime() || 0));
+
+    // Handle initial current item assignment safety loop
+    const activeSelectedMatch = visibleDashboardMatches.find(m => m.id === curMatchIdx) || visibleDashboardMatches[0] || null;
 
     return (
         <div className="app-container">
@@ -220,67 +238,94 @@ export default function App() {
                 </div>
             </div>
 
-            {/* EXPANDED THREE-TAB BAR CONTROLLER */}
+            {/* NAV BAR CONTROLLER */}
             <div className="nav">
                 <div className={`ntab ${currentTab === 'live' ? 'on' : ''}`} onClick={() => setCurrentTab('live')}>
                     In-Play Dashboard &nbsp;
-                    {liveMatches.length > 0 && <span className="tab-count-badge">{liveMatches.length}</span>}
+                    {/* Visual highlighted red pill alerting user if games are actively live right now */}
+                    {liveMatches.length > 0 ? (
+                        <span className="tab-count-badge" style={{ backgroundColor: '#ef4444', animation: 'pulse 2s infinite', color: '#fff', fontWeight: 'bold' }}>
+                            🔴 {liveMatches.length} LIVE NOW
+                        </span>
+                    ) : (
+                        visibleDashboardMatches.length > 0 && <span className="tab-count-badge">{visibleDashboardMatches.length}</span>
+                    )}
                 </div>
                 <div className={`ntab ${currentTab === 'future' ? 'on' : ''}`} onClick={() => setCurrentTab('future')}>
-                    Upcoming Fixtures &nbsp;
-                    {upcomingMatches.length > 0 && <span className="tab-count-badge style-future">{upcomingMatches.length}</span>}
+                    Upcoming Schedule Matrix ({upcomingMatchesTop3.length})
                 </div>
-                <div className={`ntab ${currentTab === 'results' ? 'on' : ''}`} onClick={() => setCurrentTab('results')}>Archived Results (FT)</div>
+                <div className={`ntab ${currentTab === 'results' ? 'on' : ''}`} onClick={() => setCurrentTab('results')}>
+                    Archived Results ({completedMatchesAll.length})
+                </div>
             </div>
 
             {/* TAB 1: IN-PLAY DASHBOARD VIEWPORT */}
             {currentTab === 'live' && (
                 <div className="page on" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 310px', gap: '14px', padding: '14px' }}>
-                    {/* LEFT PANEL: FILTERED ACTIVE STREAMS */}
+                    {/* LEFT PANEL */}
                     <div className="page-left">
                         <div className="panel">
-                            <div className="panel-hd"><h2>Real-Time Matches</h2></div>
+                            <div className="panel-hd">
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                                    <h2>Live, Latest &amp; Upcoming Matches</h2>
+                                    {liveMatches.length > 0 && (
+                                        <span style={{ fontSize: '11px', color: '#ef4444', fontWeight: 'bold', background: '#fee2e2', padding: '2px 8px', borderRadius: '20px', letterSpacing: '0.5px', animation: 'pulse 2s infinite' }}>
+                                            ⚡ ACTIVE IN-PLAY MATCHES
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
                             {loading ? (
                                 <div style={{ padding: '30px', textAlign: 'center' }}>Syncing telemetry loops...</div>
-                            ) : matchData.length === 0 ? (
-                                <div style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>No match frames registered on server.</div>
+                            ) : visibleDashboardMatches.length === 0 ? (
+                                <div style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>No upcoming or live matches found within 36 hours.</div>
                             ) : (
-                                matchData.map((match) => {
+                                visibleDashboardMatches.map((match) => {
                                     const isMatchLive = match.statusShort === "LIVE";
                                     const isMatchFinished = match.statusShort === "FT";
 
-                                    const dynamicCardStyle = isMatchLive ? {
-                                        borderLeft: '5px solid #22c55e',
-                                        background: '#f0fdf4',
-                                        boxShadow: '0 4px 6px -1px rgba(34, 197, 94, 0.12)'
-                                    } : {};
+                                    let dynamicCardStyle = {};
+                                    if (isMatchLive) {
+                                        dynamicCardStyle = {
+                                            borderLeft: '5px solid #ef4444', // Highlight color changed to warning red for instant perception
+                                            background: '#fff5f5',
+                                            boxShadow: '0 4px 12px -1px rgba(239, 68, 68, 0.25)',
+                                            outline: '1px solid #fca5a5'
+                                        };
+                                    } else if (isMatchFinished) {
+                                        dynamicCardStyle = { borderLeft: '4px solid #64748b', background: '#f8fafc' };
+                                    } else {
+                                        dynamicCardStyle = { borderLeft: '4px solid #3b82f6' };
+                                    }
 
                                     return (
                                         <div
-                                            key={match.id}
+                                            key={match.fixtureId}
                                             className={`mcard ${activeSelectedMatch?.id === match.id ? 'sel' : ''} ${isMatchLive ? 'live-m' : ''}`}
                                             style={dynamicCardStyle}
                                             onClick={() => setCurMatchIdx(match.id)}
                                         >
                                             <div className="mcard-top">
                                                 <span className="mcard-grp">{match.grp}</span>
-                                                <span className={`badge ${isMatchLive ? 'b-live pulsing-badge-glow' : (isMatchFinished ? 'b-ft' : 'b-sched')}`}>
-                                                    {isMatchLive ? `🔴 IN PLAY — ${match.elapsed}'` : (isMatchFinished ? 'FINAL (FT)' : 'SCHEDULED')}
+                                                <span className={`badge ${isMatchLive ? 'b-live pulsing-badge-glow' : (isMatchFinished ? 'b-ft' : 'b-sched')}`} style={isMatchLive ? { backgroundColor: '#ef4444', color: '#fff' } : {}}>
+                                                    {isMatchLive ? `🔴 LIVE — ${match.elapsed}'` : (isMatchFinished ? 'FINAL (FT)' : 'SCHEDULED')}
                                                 </span>
                                             </div>
                                             <div className="mteams">
                                                 {match.hflag && <img className="mflag" src={match.hflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
-                                                <span className="mname" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#0f172a' }}>{match.h}</span>
+                                                <span className="mname" style={{ fontWeight: '700', color: '#0f172a' }}>{match.h}</span>
 
-                                                {/* FIX: Explicitly forcing dark slate color to prevent theme stylesheet white-out */}
-                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ color: '#0f172a', fontWeight: '800', padding: '0 4px' }}>
+                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ color: isMatchLive ? '#ef4444' : '#0f172a', fontWeight: '800', padding: '0 8px', background: '#f1f5f9', borderRadius: '4px' }}>
                                                     {match.goalsHome} – {match.goalsAway}
                                                 </span>
 
-                                                <span className="mname r" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#0f172a' }}>{match.a}</span>
+                                                <span className="mname r" style={{ fontWeight: '700', color: '#0f172a' }}>{match.a}</span>
                                                 {match.aflag && <img className="mflag" src={match.aflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
                                             </div>
-                                            <div className="mvenue">🏟️ {match.venue}</div>
+                                            <div className="mvenue" style={{ fontSize: '11px', display: 'flex', justifyContent: 'space-between', color: '#64748b', marginTop: '4px' }}>
+                                                <span>🏟️ {match.venue}</span>
+                                                <span style={{ fontWeight: '700', color: '#1e293b' }}>🕒 {match.kickoffTime}</span>
+                                            </div>
                                         </div>
                                     );
                                 })
@@ -288,11 +333,11 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* INTERMEDIATE DISPLAY COLUMN */}
+                    {/* INTERMEDIATE DISPLAY PANEL */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {activeSelectedMatch ? (
                             <>
-                                <div className="scoreboard" style={{ background: activeSelectedMatch.statusShort === 'LIVE' ? 'linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%)' : '#fff' }}>
+                                <div className="scoreboard" style={{ background: activeSelectedMatch.statusShort === 'LIVE' ? 'linear-gradient(135deg, #ffffff 0%, #fff5f5 100%)' : '#fff', border: activeSelectedMatch.statusShort === 'LIVE' ? '1px solid #fca5a5' : '1px solid #e2e8f0' }}>
                                     <div className="sb-grp">{activeSelectedMatch.grp.toUpperCase()}</div>
                                     <div className="sb-teams">
                                         <div className="sb-team">
@@ -300,12 +345,11 @@ export default function App() {
                                             <div className="sb-tname" style={{ color: '#0f172a', fontWeight: '700' }}>{activeSelectedMatch.h}</div>
                                         </div>
                                         <div className="sb-scores">
-                                            {/* FIX: Standardizing text fill colors to black/dark gray for scoreboard header display */}
-                                            <div className="sb-num" style={{ color: '#0f172a', fontWeight: '800' }}>
+                                            <div className="sb-num" style={{ color: activeSelectedMatch.statusShort === 'LIVE' ? '#ef4444' : '#0f172a', fontWeight: '800' }}>
                                                 {activeSelectedMatch.goalsHome} &nbsp; – &nbsp; {activeSelectedMatch.goalsAway}
                                             </div>
-                                            <div className="sb-time" style={{ color: activeSelectedMatch.statusShort === 'LIVE' ? '#22c55e' : '#64748b', fontWeight: 'bold' }}>
-                                                {activeSelectedMatch.statusShort === 'FT' ? '🏁 Concluded Full-Time' : (activeSelectedMatch.statusShort === 'SCHED' ? '📅 Upcoming Fixture' : `⏱️ In-Play: ${activeSelectedMatch.elapsed}'`)}
+                                            <div className="sb-time" style={{ color: activeSelectedMatch.statusShort === 'LIVE' ? '#ef4444' : '#64748b', fontWeight: 'bold' }}>
+                                                {activeSelectedMatch.statusShort === 'FT' ? '🏁 Concluded Full-Time' : (activeSelectedMatch.statusShort === 'SCHED' ? '📅 Upcoming setup' : `⏱️ In-Play: ${activeSelectedMatch.elapsed}'`)}
                                             </div>
                                         </div>
                                         <div className="sb-team">
@@ -317,8 +361,9 @@ export default function App() {
                                 </div>
 
                                 <div className="feed-wrap" style={{ flex: 1, background: '#fff', padding: '14px', borderRadius: '12px' }}>
-                                    <div className="feed-hd" style={{ paddingBottom: '8px', borderBottom: '1px solid #f1f5f9', marginBottom: '10px' }}>
+                                    <div className="feed-hd" style={{ paddingBottom: '8px', borderBottom: '1px solid #f1f5f9', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <h2 style={{ fontSize: '14px', fontWeight: '700' }}>Event Commentary Log</h2>
+                                        <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 'bold' }}>🕒 Date/Time: {activeSelectedMatch.kickoffTime}</span>
                                     </div>
                                     <div className="feed-scroll" style={{ maxHeight: '380px', overflowY: 'auto' }}>
                                         {activeSelectedMatch.fullCommentary?.slice().reverse().map((log, i) => {
@@ -337,51 +382,51 @@ export default function App() {
                                 </div>
                             </>
                         ) : (
-                            <div className="panel" style={{ padding: '20px', textAlign: 'center' }}>Select an active tracking target row.</div>
+                            <div className="panel" style={{ padding: '20px', textAlign: 'center' }}>Select an active live compilation row.</div>
                         )}
                     </div>
 
-                    {/* RIGHT COLUMN INFO PANEL */}
+                    {/* RIGHT PANEL DESCRIPTOR */}
                     <div className="right-col">
                         <div className="panel" style={{ padding: '14px', background: '#fff', borderRadius: '12px' }}>
-                            <h3 style={{ fontSize: '11px', fontWeight: '800', color: '#475569', marginBottom: '6px' }}>HIGHLIGHT SYSTEMS</h3>
+                            <h3 style={{ fontSize: '11px', fontWeight: '800', color: '#475569', marginBottom: '6px' }}>WINDOW LOGIC STATUS</h3>
                             <p style={{ fontSize: '12px', color: '#64748b', lineHeight: '1.5' }}>
-                                Matches displaying a green neon border and pulsing icon indicators denote verified active live broadcasts captured in this execution cycle.
+                                The active processing algorithm evaluates the match grid arrays and ensures historical items up to 36 hours old persist visibly on the interface.
                             </p>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* TAB 2: BRAND NEW UPCOMING FIXTURES VIEWPORT */}
+            {/* TAB 2: NEXT 3 UPCOMING FIXTURES */}
             {currentTab === 'future' && (
                 <div className="page on" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     <div className="panel" style={{ background: '#fff', padding: '18px', borderRadius: '12px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', borderBottom: '1px solid #e2e8f0', paddingBottom: '10px' }}>
-                            <h2 style={{ margin: 0, color: '#0f172a' }}>Calendar Grid · Upcoming Matches</h2>
-                            <span style={{ fontSize: '12px', color: '#64748b', fontWeight: '600' }}>Count: {upcomingMatches.length} Scheduled</span>
+                            <h2 style={{ margin: 0, color: '#0f172a' }}>Calendar Matrix · Next 3 Scheduled Matches</h2>
+                            <span style={{ fontSize: '12px', color: '#3b82f6', fontWeight: '700' }}>Queue Allocation Verified</span>
                         </div>
 
-                        {upcomingMatches.length === 0 ? (
+                        {upcomingMatchesTop3.length === 0 ? (
                             <div style={{ padding: '50px', textAlign: 'center', color: '#64748b' }}>
-                                📅 No future scheduled matches detected in the current data sync payload.
+                                📅 No upcoming scheduled matches found in the payload array.
                             </div>
                         ) : (
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                                {upcomingMatches.map((match) => (
+                                {upcomingMatchesTop3.map((match) => (
                                     <div key={match.fixtureId} className="mcard" style={{ borderLeft: '4px solid #3b82f6', cursor: 'default', background: '#f8fafc' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '11px', fontWeight: '700', color: '#3b82f6' }}>
-                                            <span>⏱️ {match.kickoffTime}</span>
-                                            <span style={{ background: '#dbeafe', padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase' }}>Scheduled</span>
+                                            <span>📅 MATCH DATE: {match.kickoffTime}</span>
+                                            <span style={{ background: '#dbeafe', padding: '2px 6px', borderRadius: '4px' }}>SCHEDULED</span>
                                         </div>
-                                        <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px', fontWeight: '500' }}>{match.grp}</div>
+                                        <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px' }}>{match.grp}</div>
                                         <div className="mteams" style={{ margin: '8px 0' }}>
                                             <span className="mname" style={{ fontSize: '14px', color: '#0f172a' }}>{match.h}</span>
                                             <span style={{ color: '#94a3b8', fontSize: '11px', fontWeight: '800', padding: '0 8px' }}>VS</span>
                                             <span className="mname r" style={{ fontSize: '14px', color: '#0f172a' }}>{match.a}</span>
                                         </div>
                                         <div style={{ borderTop: '1px dashed #e2e8f0', paddingTop: '6px', marginTop: '6px', fontSize: '11px', color: '#64748b' }}>
-                                            📍 Ground Arena: {match.venue}
+                                            🏟️ Arena Grounds: {match.venue}
                                         </div>
                                     </div>
                                 ))}
@@ -391,22 +436,26 @@ export default function App() {
                 </div>
             )}
 
-            {/* TAB 3: ARCHIVED RESULTS TAB */}
+            {/* TAB 3: COMPLETE ARCHIVED RESULTS */}
             {currentTab === 'results' && (
                 <div className="page on" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     <div className="panel" style={{ background: '#fff', padding: '16px', borderRadius: '12px' }}>
-                        <h2 style={{ marginBottom: '12px', paddingBottom: '6px', borderBottom: '1px solid #e2e8f0', color: '#0f172a' }}>Archived Match Databases (FT)</h2>
-                        {completedMatches.length === 0 ? (
-                            <div style={{ padding: '30px', textAlign: 'center', color: '#64748b' }}>No archived final results found inside the uncached data array.</div>
+                        <h2 style={{ marginBottom: '12px', paddingBottom: '6px', borderBottom: '1px solid #e2e8f0', color: '#0f172a' }}>Completed Match Databases (FT Archive)</h2>
+                        {completedMatchesAll.length === 0 ? (
+                            <div style={{ padding: '30px', textAlign: 'center', color: '#64748b' }}>No archived match files found in data tracks.</div>
                         ) : (
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                                {completedMatches.map((match) => (
-                                    <div key={match.id} className="mcard" style={{ borderLeft: '4px solid #94a3b8', cursor: 'default' }}>
+                                {completedMatchesAll.map((match) => (
+                                    <div key={match.fixtureId} className="mcard" style={{ borderLeft: '4px solid #94a3b8', cursor: 'default' }}>
                                         <div className="mcard-top"><span style={{ color: '#64748b' }}>{match.grp}</span><span className="badge b-ft">FT</span></div>
                                         <div className="mteams">
                                             <span className="mname" style={{ color: '#0f172a' }}>{match.h}</span>
                                             <span className="mscore" style={{ color: '#0f172a', fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
                                             <span className="mname r" style={{ color: '#0f172a' }}>{match.a}</span>
+                                        </div>
+                                        <div style={{ borderTop: '1px dashed #e2e8f0', paddingTop: '6px', marginTop: '6px', fontSize: '11px', color: '#64748b', display: 'flex', justifyContent: 'space-between' }}>
+                                            <span>🏟️ Venue: {match.venue}</span>
+                                            <span style={{ fontWeight: '700', color: '#64748b' }}>📅 Date: {match.kickoffTime}</span>
                                         </div>
                                     </div>
                                 ))}
