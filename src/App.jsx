@@ -3,7 +3,7 @@ import './index.css';
 
 export default function App() {
     // ── CONFIGURATION AREA ──
-    const API_TOKEN = "f6bffce1b5394337b5aacedb0594d0a4";
+    const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
     // States
     const [currentTab, setCurrentTab] = useState('live');
