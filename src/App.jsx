@@ -3,7 +3,17 @@ import './index.css';
 
 export default function App() {
     // ── CONFIGURATION AREA ──
-    const API_TOKEN = "f6bffce1b5394337b5aacedb0594d0a4";
+    // worldcup26.ir is a community World Cup 2026 API with CORS_ORIGINS=* —
+    // it can be called directly from the browser with no proxy at all.
+    // football-data.org has NO CORS support, so it always needed a 3rd-party
+    // proxy (corsproxy.io / allorigins.win / cors-anywhere). Those proxies behave
+    // inconsistently by region/IP — which is why it worked on your local machine
+    // but failed once deployed to Vercel's edge network ("Connection Interface
+    // Failure"). Removing the proxy dependency removes that whole failure class.
+    // Source: https://github.com/rezarahiminia/worldcup2026
+    const GAMES_API_URL = "https://worldcup26.ir/get/games";
+    const TEAMS_API_URL = "https://worldcup26.ir/get/teams";
+    const STADIUMS_API_URL = "https://worldcup26.ir/get/stadiums";
 
     // States
     const [currentTab, setCurrentTab] = useState('live');
@@ -63,41 +73,36 @@ export default function App() {
         return baseline.sort((a, b) => a.min - b.min);
     };
 
-    // ── API PROCESSING DATA PIPELINE WITH CACHE BUSTING & ENVIRONMENT CHECK ──
+    // ── DATA SYNC PIPELINE (DIRECT, NO PROXY) ──
     const syncFootballDataFeed = async () => {
+        setEngineStatus("Syncing...");
+
         try {
-            const cacheBuster = `?_cb=${new Date().getTime()}`;
-            const apiEndpoint = `https://api.football-data.org/v4/matches${cacheBuster}`;
+            const [gamesRes, teamsRes, stadiumsRes] = await Promise.all([
+                fetch(GAMES_API_URL),
+                fetch(TEAMS_API_URL),
+                fetch(STADIUMS_API_URL)
+            ]);
 
-            // Check if application is running locally
-            const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-            // FIXED SYNTAX: Local mode uses corsproxy.io with the correct query param identifier string
-            const FRESH_URL = isLocal
-                ? `https://corsproxy.io/?url=${encodeURIComponent(apiEndpoint)}`
-                : `/api/football-matches${cacheBuster}`;
-
-            const response = await fetch(FRESH_URL, {
-                method: "GET",
-                headers: {
-                    "X-Auth-Token": API_TOKEN
-                }
-            });
-
-            if (!response.ok) {
-                throw new Error(`API returned status code: ${response.status}`);
+            if (!gamesRes.ok || !teamsRes.ok || !stadiumsRes.ok) {
+                throw new Error(`API responded with status ${gamesRes.status}/${teamsRes.status}/${stadiumsRes.status}`);
             }
 
-            const data = await response.json();
+            const games = await gamesRes.json();
+            const teams = await teamsRes.json();
+            const stadiums = await stadiumsRes.json();
 
-            if (data && data.matches && data.matches.length > 0) {
-                parseAndDisplayMatches(data.matches, isLocal ? "LOCAL DEV PIPELINE ACTIVE" : "VERCEL CORE STREAM ACTIVE");
+            const gamesList = Array.isArray(games) ? games : (games.data || games.games || []);
+            const teamsList = Array.isArray(teams) ? teams : (teams.data || teams.teams || []);
+            const stadiumsList = Array.isArray(stadiums) ? stadiums : (stadiums.data || stadiums.stadiums || []);
+
+            if (gamesList.length > 0) {
+                parseAndDisplayMatches(gamesList, teamsList, stadiumsList, "STREAM ACTIVE (worldcup26.ir)");
             } else {
                 setEngineStatus("Connected (Empty Set)");
                 setMatchData([]);
                 setLoading(false);
             }
-
         } catch (error) {
             console.error("Network sync block:", error);
             setEngineStatus("Connection Interface Failure");
@@ -105,38 +110,61 @@ export default function App() {
         }
     };
 
-    const parseAndDisplayMatches = (apiMatches, modeLabel) => {
-        const parsed = apiMatches.map((match, index) => {
+    const parseAndDisplayMatches = (rawMatches, teamsList, stadiumsList, modeLabel) => {
+        const teamById = {};
+        (teamsList || []).forEach(t => { teamById[String(t.id)] = t; });
+        const stadiumById = {};
+        (stadiumsList || []).forEach(s => { stadiumById[String(s.id)] = s; });
+
+        const parsed = rawMatches.map((match, index) => {
+            const homeTeam = teamById[String(match.home_team_id)];
+            const awayTeam = teamById[String(match.away_team_id)];
+            const stadium = stadiumById[String(match.stadium_id)];
+
+            // This API exposes a binary finished flag plus a scheduled date — no
+            // documented live in-play minute field — so status/elapsed are derived:
+            const kickoff = match.local_date ? new Date(match.local_date) : null;
+            const now = new Date();
             let status = "SCHED";
-            if (match.status === "FINISHED") status = "FT";
-            if (match.status === "IN_PLAY" || match.status === "PAUSED" || match.status === "LIVE") status = "LIVE";
+            if (match.finished) {
+                status = "FT";
+            } else if (kickoff && kickoff <= now) {
+                status = "LIVE";
+            }
 
             let minutesElapsed = 0;
-            if (match.minute) minutesElapsed = match.minute;
-            else if (status === "LIVE") minutesElapsed = 45;
-            else if (status === "FT") minutesElapsed = 90;
+            if (status === "LIVE" && kickoff) {
+                const diffMs = now - kickoff;
+                const calcMin = Math.floor(diffMs / 60000);
+                minutesElapsed = calcMin > 0 ? Math.min(calcMin, 90) : 1;
+            } else if (status === "FT") {
+                minutesElapsed = 90;
+            }
 
             let localizedKickoff = "Date Pending";
-            if (match.utcDate) {
-                localizedKickoff = new Date(match.utcDate).toLocaleString([], {
+            if (match.local_date) {
+                localizedKickoff = new Date(match.local_date).toLocaleString([], {
                     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
                 });
             }
 
+            const roundInfo = match.matchday ? `Matchday ${match.matchday}` :
+                (match.type ? match.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : "Group Stage");
+
             return {
                 id: index,
-                fixtureId: match.id || `fd-${index}`,
-                grp: `${match.competition?.name || 'Global Football'}`,
+                fixtureId: match.id || `wc-${index}`,
+                grp: `FIFA World Cup 2026 · Group ${match.group || '—'} · ${roundInfo}`,
                 statusShort: status,
                 elapsed: minutesElapsed,
                 kickoffTime: localizedKickoff,
-                h: match.homeTeam?.name || "Home Side",
-                a: match.awayTeam?.name || "Away Side",
-                hflag: match.homeTeam?.crest || "",
-                aflag: match.awayTeam?.crest || "",
-                venue: match.venue || "Stadium Ground Arena",
-                goalsHome: String(match.score?.fullTime?.home ?? 0),
-                goalsAway: String(match.score?.fullTime?.away ?? 0)
+                h: homeTeam ? homeTeam.name_en : "Home Side",
+                a: awayTeam ? awayTeam.name_en : "Away Side",
+                hflag: homeTeam ? homeTeam.flag : "",
+                aflag: awayTeam ? awayTeam.flag : "",
+                venue: stadium ? `${stadium.name_en} · ${stadium.city_en}` : "Stadium Ground Arena",
+                goalsHome: match.home_score !== undefined && match.home_score !== null ? String(match.home_score) : "0",
+                goalsAway: match.away_score !== undefined && match.away_score !== null ? String(match.away_score) : "0"
             };
         });
 
@@ -165,14 +193,13 @@ export default function App() {
         };
     }, []);
 
-    // Selection matrices
     const activeSelectedMatch = matchData.find(m => m.id === curMatchIdx) || matchData[0] || null;
     const liveMatches = matchData.filter(m => m.statusShort === "LIVE");
     const completedMatches = matchData.filter(m => m.statusShort === "FT");
     const upcomingMatches = matchData.filter(m => m.statusShort === "SCHED");
 
     return (
-        <div className="app-container" style={{ color: '#0f172a' }}>
+        <div className="app-container">
             {/* BRANDING TOP BAR */}
             <div className="hdr">
                 <div className="hdr-top">
@@ -241,11 +268,16 @@ export default function App() {
                                                     {isMatchLive ? `🔴 IN PLAY — ${match.elapsed}'` : (isMatchFinished ? 'FINAL (FT)' : 'SCHEDULED')}
                                                 </span>
                                             </div>
-                                            <div className="mteams" style={{ color: '#0f172a' }}>
+                                            <div className="mteams">
                                                 {match.hflag && <img className="mflag" src={match.hflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
-                                                <span className="mname" style={{ fontWeight: isMatchLive ? '700' : '400' }}>{match.h}</span>
-                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
-                                                <span className="mname r" style={{ fontWeight: isMatchLive ? '700' : '400' }}>{match.a}</span>
+                                                <span className="mname" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#0f172a' }}>{match.h}</span>
+
+                                                {/* FIX: Explicitly forcing dark slate color to prevent theme stylesheet white-out */}
+                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ color: '#0f172a', fontWeight: '800', padding: '0 4px' }}>
+                                                    {match.goalsHome} – {match.goalsAway}
+                                                </span>
+
+                                                <span className="mname r" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#0f172a' }}>{match.a}</span>
                                                 {match.aflag && <img className="mflag" src={match.aflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
                                             </div>
                                             <div className="mvenue">🏟️ {match.venue}</div>
@@ -261,14 +293,17 @@ export default function App() {
                         {activeSelectedMatch ? (
                             <>
                                 <div className="scoreboard" style={{ background: activeSelectedMatch.statusShort === 'LIVE' ? 'linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%)' : '#fff' }}>
-                                    <div className="sb-grp" style={{ color: '#475569' }}>{activeSelectedMatch.grp.toUpperCase()}</div>
+                                    <div className="sb-grp">{activeSelectedMatch.grp.toUpperCase()}</div>
                                     <div className="sb-teams">
                                         <div className="sb-team">
                                             {activeSelectedMatch.hflag && <img className="sb-flag" src={activeSelectedMatch.hflag} alt="" onError={(e) => e.target.style.opacity = 0} />}
                                             <div className="sb-tname" style={{ color: '#0f172a', fontWeight: '700' }}>{activeSelectedMatch.h}</div>
                                         </div>
                                         <div className="sb-scores">
-                                            <div className="sb-num" style={{ color: '#0f172a', fontWeight: '800' }}>{activeSelectedMatch.goalsHome} &nbsp; – &nbsp; {activeSelectedMatch.goalsAway}</div>
+                                            {/* FIX: Standardizing text fill colors to black/dark gray for scoreboard header display */}
+                                            <div className="sb-num" style={{ color: '#0f172a', fontWeight: '800' }}>
+                                                {activeSelectedMatch.goalsHome} &nbsp; – &nbsp; {activeSelectedMatch.goalsAway}
+                                            </div>
                                             <div className="sb-time" style={{ color: activeSelectedMatch.statusShort === 'LIVE' ? '#22c55e' : '#64748b', fontWeight: 'bold' }}>
                                                 {activeSelectedMatch.statusShort === 'FT' ? '🏁 Concluded Full-Time' : (activeSelectedMatch.statusShort === 'SCHED' ? '📅 Upcoming Fixture' : `⏱️ In-Play: ${activeSelectedMatch.elapsed}'`)}
                                             </div>
@@ -283,7 +318,7 @@ export default function App() {
 
                                 <div className="feed-wrap" style={{ flex: 1, background: '#fff', padding: '14px', borderRadius: '12px' }}>
                                     <div className="feed-hd" style={{ paddingBottom: '8px', borderBottom: '1px solid #f1f5f9', marginBottom: '10px' }}>
-                                        <h2 style={{ fontSize: '14px', fontWeight: '700', color: '#0f172a' }}>Event Commentary Log</h2>
+                                        <h2 style={{ fontSize: '14px', fontWeight: '700' }}>Event Commentary Log</h2>
                                     </div>
                                     <div className="feed-scroll" style={{ maxHeight: '380px', overflowY: 'auto' }}>
                                         {activeSelectedMatch.fullCommentary?.slice().reverse().map((log, i) => {
@@ -302,7 +337,7 @@ export default function App() {
                                 </div>
                             </>
                         ) : (
-                            <div className="panel" style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>Select an active tracking target row.</div>
+                            <div className="panel" style={{ padding: '20px', textAlign: 'center' }}>Select an active tracking target row.</div>
                         )}
                     </div>
 
@@ -340,10 +375,10 @@ export default function App() {
                                             <span style={{ background: '#dbeafe', padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase' }}>Scheduled</span>
                                         </div>
                                         <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px', fontWeight: '500' }}>{match.grp}</div>
-                                        <div className="mteams" style={{ margin: '8px 0', color: '#0f172a' }}>
-                                            <span className="mname" style={{ fontSize: '14px' }}>{match.h}</span>
+                                        <div className="mteams" style={{ margin: '8px 0' }}>
+                                            <span className="mname" style={{ fontSize: '14px', color: '#0f172a' }}>{match.h}</span>
                                             <span style={{ color: '#94a3b8', fontSize: '11px', fontWeight: '800', padding: '0 8px' }}>VS</span>
-                                            <span className="mname r" style={{ fontSize: '14px' }}>{match.a}</span>
+                                            <span className="mname r" style={{ fontSize: '14px', color: '#0f172a' }}>{match.a}</span>
                                         </div>
                                         <div style={{ borderTop: '1px dashed #e2e8f0', paddingTop: '6px', marginTop: '6px', fontSize: '11px', color: '#64748b' }}>
                                             📍 Ground Arena: {match.venue}
@@ -367,11 +402,11 @@ export default function App() {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                 {completedMatches.map((match) => (
                                     <div key={match.id} className="mcard" style={{ borderLeft: '4px solid #94a3b8', cursor: 'default' }}>
-                                        <div className="mcard-top"><span>{match.grp}</span><span className="badge b-ft">FT</span></div>
-                                        <div className="mteams" style={{ color: '#0f172a' }}>
-                                            <span className="mname">{match.h}</span>
-                                            <span className="mscore" style={{ fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
-                                            <span className="mname r">{match.a}</span>
+                                        <div className="mcard-top"><span style={{ color: '#64748b' }}>{match.grp}</span><span className="badge b-ft">FT</span></div>
+                                        <div className="mteams">
+                                            <span className="mname" style={{ color: '#0f172a' }}>{match.h}</span>
+                                            <span className="mscore" style={{ color: '#0f172a', fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
+                                            <span className="mname r" style={{ color: '#0f172a' }}>{match.a}</span>
                                         </div>
                                     </div>
                                 ))}
