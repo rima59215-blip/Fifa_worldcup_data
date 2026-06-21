@@ -3,8 +3,7 @@ import './index.css';
 
 export default function App() {
     // ── CONFIGURATION AREA ──
-    // Automatically uses a Vercel/environment variable if configured, otherwise uses your fallback key string
-    const API_TOKEN = import.meta.env.VITE_API_TOKEN || "f6bffce1b5394337b5aacedb0594d0a4";
+    const API_TOKEN = "f6bffce1b5394337b5aacedb0594d0a4";
 
     // States
     const [currentTab, setCurrentTab] = useState('live');
@@ -64,47 +63,35 @@ export default function App() {
         return baseline.sort((a, b) => a.min - b.min);
     };
 
-    // ── API PROCESSING DATA PIPELINE WITH CACHE BUSTING & MULTI-PROXY FALLBACK ──
+    // ── API PROCESSING DATA PIPELINE WITH CACHE BUSTING & ENVIRONMENT CHECK ──
     const syncFootballDataFeed = async () => {
         try {
             const cacheBuster = `?_cb=${new Date().getTime()}`;
-            const targetApiUrl = `https://api.football-data.org/v4/matches${cacheBuster}`;
+            const apiEndpoint = `https://api.football-data.org/v4/matches${cacheBuster}`;
 
-            // Array of multiple proxies. If one is blocked by your hosting provider, the code tries the next one.
-            const alternativePipelines = [
-                `https://api.allorigins.win/raw?url=${encodeURIComponent(targetApiUrl)}`,
-                `https://corsproxy.io/?${targetApiUrl}`
-            ];
+            // Check if application is running locally
+            const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-            let response = null;
-            let successPipelineLabel = "Default Path";
+            // FIXED SYNTAX: Local mode uses corsproxy.io with the correct query param identifier string
+            const FRESH_URL = isLocal
+                ? `https://corsproxy.io/?url=${encodeURIComponent(apiEndpoint)}`
+                : `/api/football-matches${cacheBuster}`;
 
-            for (const proxyUrl of alternativePipelines) {
-                try {
-                    response = await fetch(proxyUrl, {
-                        method: "GET",
-                        headers: {
-                            "X-Auth-Token": API_TOKEN
-                        }
-                    });
-                    
-                    if (response.ok) {
-                        successPipelineLabel = proxyUrl.includes("allorigins") ? "AllOrigins Stream" : "CorsProxyIO Stream";
-                        break;
-                    }
-                } catch (proxyError) {
-                    console.warn(`Proxy branch bypassed: ${proxyUrl}`);
+            const response = await fetch(FRESH_URL, {
+                method: "GET",
+                headers: {
+                    "X-Auth-Token": API_TOKEN
                 }
-            }
+            });
 
-            if (!response || !response.ok) {
-                throw new Error(`API returned network status: ${response ? response.status : 'No Response'}`);
+            if (!response.ok) {
+                throw new Error(`API returned status code: ${response.status}`);
             }
 
             const data = await response.json();
 
             if (data && data.matches && data.matches.length > 0) {
-                parseAndDisplayMatches(data.matches, `V4 ${successPipelineLabel} ACTIVE`);
+                parseAndDisplayMatches(data.matches, isLocal ? "LOCAL DEV PIPELINE ACTIVE" : "VERCEL CORE STREAM ACTIVE");
             } else {
                 setEngineStatus("Connected (Empty Set)");
                 setMatchData([]);
@@ -178,6 +165,7 @@ export default function App() {
         };
     }, []);
 
+    // Selection matrices
     const activeSelectedMatch = matchData.find(m => m.id === curMatchIdx) || matchData[0] || null;
     const liveMatches = matchData.filter(m => m.statusShort === "LIVE");
     const completedMatches = matchData.filter(m => m.statusShort === "FT");
@@ -255,12 +243,9 @@ export default function App() {
                                             </div>
                                             <div className="mteams" style={{ color: '#0f172a' }}>
                                                 {match.hflag && <img className="mflag" src={match.hflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
-                                                <span className="mname" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#0f172a' }}>{match.h}</span>
-                                                {/* FIX: Forced typography text color to dark charcoal to fix hidden/white score styling glitch */}
-                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ color: '#0f172a', fontWeight: '800' }}>
-                                                    {match.goalsHome} – {match.goalsAway}
-                                                </span>
-                                                <span className="mname r" style={{ fontWeight: isMatchLive ? '700' : '400', color: '#0f172a' }}>{match.a}</span>
+                                                <span className="mname" style={{ fontWeight: isMatchLive ? '700' : '400' }}>{match.h}</span>
+                                                <span className={`mscore ${isMatchLive ? 'live-score-highlight' : ''}`} style={{ fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
+                                                <span className="mname r" style={{ fontWeight: isMatchLive ? '700' : '400' }}>{match.a}</span>
                                                 {match.aflag && <img className="mflag" src={match.aflag} alt="" onError={(e) => e.target.style.display = 'none'} />}
                                             </div>
                                             <div className="mvenue">🏟️ {match.venue}</div>
@@ -283,10 +268,7 @@ export default function App() {
                                             <div className="sb-tname" style={{ color: '#0f172a', fontWeight: '700' }}>{activeSelectedMatch.h}</div>
                                         </div>
                                         <div className="sb-scores">
-                                            {/* FIX: Added clear dark formatting to main tracking viewport layout scores */}
-                                            <div className="sb-num" style={{ color: '#0f172a', fontWeight: '800' }}>
-                                                {activeSelectedMatch.goalsHome} &nbsp; – &nbsp; {activeSelectedMatch.goalsAway}
-                                            </div>
+                                            <div className="sb-num" style={{ color: '#0f172a', fontWeight: '800' }}>{activeSelectedMatch.goalsHome} &nbsp; – &nbsp; {activeSelectedMatch.goalsAway}</div>
                                             <div className="sb-time" style={{ color: activeSelectedMatch.statusShort === 'LIVE' ? '#22c55e' : '#64748b', fontWeight: 'bold' }}>
                                                 {activeSelectedMatch.statusShort === 'FT' ? '🏁 Concluded Full-Time' : (activeSelectedMatch.statusShort === 'SCHED' ? '📅 Upcoming Fixture' : `⏱️ In-Play: ${activeSelectedMatch.elapsed}'`)}
                                             </div>
@@ -336,7 +318,7 @@ export default function App() {
                 </div>
             )}
 
-            {/* TAB 2: UPCOMING FIXTURES VIEWPORT */}
+            {/* TAB 2: BRAND NEW UPCOMING FIXTURES VIEWPORT */}
             {currentTab === 'future' && (
                 <div className="page on" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     <div className="panel" style={{ background: '#fff', padding: '18px', borderRadius: '12px' }}>
@@ -359,9 +341,9 @@ export default function App() {
                                         </div>
                                         <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px', fontWeight: '500' }}>{match.grp}</div>
                                         <div className="mteams" style={{ margin: '8px 0', color: '#0f172a' }}>
-                                            <span className="mname" style={{ fontSize: '14px', color: '#0f172a' }}>{match.h}</span>
+                                            <span className="mname" style={{ fontSize: '14px' }}>{match.h}</span>
                                             <span style={{ color: '#94a3b8', fontSize: '11px', fontWeight: '800', padding: '0 8px' }}>VS</span>
-                                            <span className="mname r" style={{ fontSize: '14px', color: '#0f172a' }}>{match.a}</span>
+                                            <span className="mname r" style={{ fontSize: '14px' }}>{match.a}</span>
                                         </div>
                                         <div style={{ borderTop: '1px dashed #e2e8f0', paddingTop: '6px', marginTop: '6px', fontSize: '11px', color: '#64748b' }}>
                                             📍 Ground Arena: {match.venue}
@@ -385,11 +367,11 @@ export default function App() {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                 {completedMatches.map((match) => (
                                     <div key={match.id} className="mcard" style={{ borderLeft: '4px solid #94a3b8', cursor: 'default' }}>
-                                        <div className="mcard-top"><span style={{ color: '#64748b' }}>{match.grp}</span><span className="badge b-ft">FT</span></div>
+                                        <div className="mcard-top"><span>{match.grp}</span><span className="badge b-ft">FT</span></div>
                                         <div className="mteams" style={{ color: '#0f172a' }}>
-                                            <span className="mname" style={{ color: '#0f172a' }}>{match.h}</span>
-                                            <span className="mscore" style={{ color: '#0f172a', fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
-                                            <span className="mname r" style={{ color: '#0f172a' }}>{match.a}</span>
+                                            <span className="mname">{match.h}</span>
+                                            <span className="mscore" style={{ fontWeight: '800' }}>{match.goalsHome} – {match.goalsAway}</span>
+                                            <span className="mname r">{match.a}</span>
                                         </div>
                                     </div>
                                 ))}
